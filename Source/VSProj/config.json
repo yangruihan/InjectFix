@@ -1,6 +1,6 @@
 {
-    "UnityHome": "/Applications/Unity2017/Unity.app",
+    "UnityHome": "/Applications/Unity/Hub/Editor/2017.4.19f1/Unity.app",
     "DllOutput": "../UnityProj/Assets/Plugins/IFix.Core.dll",
     "ToolKitOutput": "../UnityProj/IFixToolKit",
-    "ConfuseKey": ""
+    "ConfuseKey": "chessrush"
 }

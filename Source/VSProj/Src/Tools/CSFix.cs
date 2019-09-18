@@ -55,7 +55,7 @@ namespace IFix
                 {
                     //³¢ÊÔ¶ÁÈ¡·ûºÅ
                     assembly = AssemblyDefinition.ReadAssembly(assmeblyPath,
-                        new ReaderParameters { ReadSymbols = true });
+                        new ReaderParameters { ReadSymbols = false });
                 }
                 catch
                 {
@@ -107,7 +107,7 @@ namespace IFix
 
                     tranlater.Serialize(args[4]);
 
-                    assembly.Write(args[5], new WriterParameters { WriteSymbols = readSymbols });
+                    assembly.Write(args[5], new WriterParameters { WriteSymbols = false });
                     //ilfixAassembly.Write(args[2], new WriterParameters { WriteSymbols = true });
                 }
                 else
