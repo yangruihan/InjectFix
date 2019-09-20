@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Tencent is pleased to support the open source community by making InjectFix available.
  * Copyright (C) 2019 THL A29 Limited, a Tencent company.  All rights reserved.
  * InjectFix is licensed under the MIT License, except for the third-party components listed in the file 'LICENSE' which may be subject to their corresponding license terms. 
@@ -118,7 +118,7 @@ namespace IFix.Editor
                 {
                     if (line.StartsWith("Warning:"))
                     {
-                        UnityEngine.Debug.LogWarning(line);
+                        //UnityEngine.Debug.LogWarning(line);
                     }
                     else if (line.StartsWith("Error:"))
                     {
@@ -149,16 +149,17 @@ namespace IFix.Editor
                 UnityEngine.Debug.LogError("compiling or playing");
                 return;
             }
+            AutoInject = true;
             InjectAllAssemblys();
         }
 
-        public static bool AutoInject = true; //可以在外部禁用掉自动注入
+        public static bool AutoInject = false; //可以在外部禁用掉自动注入
 
         public static bool InjectOnce = false; //AutoInjectAssemblys只调用一次，可以防止自动化打包时，很多场景导致AutoInjectAssemblys被多次调用
 
         static bool injected = false;
 
-        [UnityEditor.Callbacks.PostProcessScene]
+        [UnityEditor.Callbacks.PostProcessScene(100)]
         public static void AutoInjectAssemblys()
         {
             if (AutoInject && !injected)
@@ -206,6 +207,7 @@ namespace IFix.Editor
         /// <param name="assembly">程序集路径</param>
         public static void InjectAssembly(string assembly)
         {
+            var assemblyName = Path.GetFileNameWithoutExtension(assembly);
             var configure = Configure.GetConfigureByTags(new List<string>() {
                 "IFix.IFixAttribute",
                 "IFix.InterpretAttribute",
@@ -228,7 +230,7 @@ namespace IFix.Editor
 
                     var typeList = kv.Value.Where(item => item.Key is Type)
                         .Select(item => new KeyValuePair<Type, int>(item.Key as Type, item.Value))
-                        .Where(item => item.Key.Assembly.GetName().Name == assembly)
+                        .Where(item => item.Key.Assembly.GetName().Name == assemblyName)
                         .ToList();
                     writer.Write(typeList.Count);
 
@@ -249,10 +251,9 @@ namespace IFix.Editor
             {
 
                 var core_path = "./Assets/Plugins/IFix.Core.dll";
-                var assembly_path = string.Format("./Library/ScriptAssemblies/{0}.dll", assembly);
-                var patch_path = string.Format("./{0}.ill.bytes", assembly);
-                List<string> args = new List<string>() { "-inject", core_path, assembly_path,
-                    processCfgPath, patch_path, assembly_path };
+                var patch_path = string.Format("./{0}.ill.bytes", assemblyName);
+                List<string> args = new List<string>() { "-inject", core_path, assembly,
+                    processCfgPath, patch_path, assembly };
 
                 foreach (var path in
                     (from asm in AppDomain.CurrentDomain.GetAssemblies()
@@ -265,11 +266,33 @@ namespace IFix.Editor
                     }
                     catch { }
                 }
+                GetAssetsDllPaths(args, "Assets");
 
                 CallIFix(args);
             }
 
             File.Delete(processCfgPath);
+        }
+        public static void GetAssetsDllPaths(List<string> args, string dir)
+        {
+
+            foreach (var file in Directory.GetFiles(dir))
+            {
+                if (file.IndexOf(Path.DirectorySeparatorChar + "Editor" + Path.DirectorySeparatorChar, StringComparison.Ordinal) > 0)
+                {
+                    return;
+                }
+                if (Path.GetExtension(file).ToLower() == ".dll")
+                {
+                    args.Add(Path.GetDirectoryName(file));
+                    break;
+                }
+            }
+
+            foreach (var subDir in Directory.GetDirectories(dir))
+            {
+                GetAssetsDllPaths(args, subDir);
+            }
         }
 
         /// <summary>
@@ -296,9 +319,18 @@ namespace IFix.Editor
         //另外可以直接调用InjectAssembly对其它程序集进行注入。
         static string[] injectAssemblys = new string[]
         {
-            "Assembly-CSharp",
-            "Assembly-CSharp-firstpass"
+            "./Library/ScriptAssemblies/Assembly-CSharp.dll",
+            "./Library/ScriptAssemblies/Assembly-CSharp-firstpass.dll",
+            
         };
+
+        public static void AddCustomAssmblyToInject(string dllPath)
+        {
+            if(!string.IsNullOrEmpty(dllPath) && !injectAssemblys.Contains(dllPath))
+            {
+                injectAssemblys = injectAssemblys.Concat(new string[] { dllPath }).ToArray();
+            }
+        }
 
         /// <summary>
         /// 把注入后的程序集备份
@@ -311,27 +343,26 @@ namespace IFix.Editor
                 Directory.CreateDirectory(BACKUP_PATH);
             }
 
-            var scriptAssembliesDir = "./Library/ScriptAssemblies/";
 
             foreach (var assembly in injectAssemblys)
             {
-                var dllFile = string.Format("{0}{1}.dll", scriptAssembliesDir, assembly);
-                if (!File.Exists(dllFile))
+                var assemblyName = Path.GetFileNameWithoutExtension(assembly);
+                if (!File.Exists(assembly))
                 {
                     continue;
                 }
-                File.Copy(dllFile, string.Format("{0}/{1}-{2}.dll", BACKUP_PATH, assembly, ts), true);
+                File.Copy(assembly, string.Format("{0}/{1}-{2}.dll", BACKUP_PATH, assemblyName, ts), true);
 
-                var mdbFile = string.Format("{0}{1}.dll.mdb", scriptAssembliesDir, assembly);
+                var mdbFile = string.Format("{0}.mdb", assembly);
                 if (File.Exists(mdbFile))
                 {
-                    File.Copy(mdbFile, string.Format("{0}/{1}-{2}.dll.mdb", BACKUP_PATH, assembly, ts), true);
+                    File.Copy(mdbFile, string.Format("{0}/{1}-{2}.dll.mdb", BACKUP_PATH, assemblyName, ts), true);
                 }
 
-                var pdbFile = string.Format("{0}{1}.dll.pdb", scriptAssembliesDir, assembly);
+                var pdbFile = string.Format("{0}.pdb", assembly);
                 if (File.Exists(pdbFile))
                 {
-                    File.Copy(pdbFile, string.Format("{0}/{1}-{2}.dll.pdb", BACKUP_PATH, assembly, ts), true);
+                    File.Copy(pdbFile, string.Format("{0}/{1}-{2}.dll.pdb", BACKUP_PATH, assemblyName, ts), true);
                 }
             }
         }
@@ -342,29 +373,29 @@ namespace IFix.Editor
         /// <param name="ts">时间戳</param>
         static void doRestore(string ts)
         {
-            var scriptAssembliesDir = "./Library/ScriptAssemblies/";
 
             foreach (var assembly in injectAssemblys)
             {
-                var dllFile = string.Format("{0}/{1}-{2}.dll", BACKUP_PATH, assembly, ts);
+                var assemblyName = Path.GetFileNameWithoutExtension(assembly);
+                var dllFile = string.Format("{0}/{1}-{2}.dll", BACKUP_PATH, assemblyName, ts);
                 if (!File.Exists(dllFile))
                 {
                     continue;
                 }
-                File.Copy(dllFile, string.Format("{0}{1}.dll", scriptAssembliesDir, assembly), true);
+                File.Copy(dllFile, assembly, true);
                 UnityEngine.Debug.Log("Revert to: " + dllFile);
 
-                var mdbFile = string.Format("{0}/{1}-{2}.dll.mdb", BACKUP_PATH, assembly, ts);
+                var mdbFile = string.Format("{0}/{1}-{2}.dll.mdb", BACKUP_PATH, assemblyName, ts);
                 if (File.Exists(mdbFile))
                 {
-                    File.Copy(mdbFile, string.Format("{0}{1}.dll.mdb", scriptAssembliesDir, assembly), true);
+                    File.Copy(mdbFile, string.Format("{0}.mdb", assembly), true);
                     UnityEngine.Debug.Log("Revert to: " + mdbFile);
                 }
 
-                var pdbFile = string.Format("{0}/{1}-{2}.dll.pdb", BACKUP_PATH, assembly, ts);
+                var pdbFile = string.Format("{0}/{1}-{2}.dll.pdb", BACKUP_PATH, assemblyName, ts);
                 if (File.Exists(pdbFile))
                 {
-                    File.Copy(pdbFile, string.Format("{0}{1}.dll.pdb", scriptAssembliesDir, assembly), true);
+                    File.Copy(pdbFile, string.Format("{0}.pdb", assembly), true);
                     UnityEngine.Debug.Log("Revert to: " + pdbFile);
                 }
             }
@@ -401,24 +432,13 @@ namespace IFix.Editor
         }
 
         //缓存：解析好的编译参数
-        private static Dictionary<Platform, string> compileTemplates = new Dictionary<Platform, string>();
+        private static Dictionary<string, string> compileTemplates = new Dictionary<string, string>();
 
-        //解析unity的编译参数
-        private static string parseCompileTemplate(string path)
-        {
-            return string.Join("\n", File.ReadAllLines(path).Where(line => !line.StartsWith("Assets/")
-                && !line.StartsWith("\"Assets/")
-                && !line.StartsWith("'Assets/")
-                && !line.StartsWith("-r:Assets/")
-                && !line.StartsWith("-r:\"Assets/")
-                && !line.StartsWith("-r:'Assets/")
-                && !line.StartsWith("-out")
-                ).ToArray());
-        }
+        
 
         //对路径预处理，然后添加到StringBuilder
         //规则：如果路径含空格，则加上双引号
-        static void appendFile(StringBuilder sb, string path)
+        static void AppendFile(StringBuilder sb, string path)
         {
             if (path.IndexOf(' ') > 0)
             {
@@ -434,97 +454,101 @@ namespace IFix.Editor
         }
 
         //自动加入源码
-        private static void appendDirectory(StringBuilder src, string dir)
+        public static void AppendDirectory(StringBuilder src, string dir, bool isFirst=false)
         {
             foreach (var file in Directory.GetFiles(dir))
             {
-                //排除调Editor下的东西
-                if (file.IndexOf(Path.DirectorySeparatorChar + "Editor" + Path.DirectorySeparatorChar) > 0 )
+                if (file.IndexOf(Path.DirectorySeparatorChar + "Editor" + Path.DirectorySeparatorChar, StringComparison.Ordinal) > 0)
                 {
                     continue;
                 }
-                //排除Assembly-CSharp-firstpass
                 if (file.Substring(file.Length - 3).ToLower() == ".cs")
                 {
-                    if (file.StartsWith("Assets" + Path.DirectorySeparatorChar + "Plugins") ||
-                        file.StartsWith("Assets" + Path.DirectorySeparatorChar + "Standard Assets") ||
-                        file.StartsWith("Assets" + Path.DirectorySeparatorChar + "Pro Standard Assets"))
+                    if (file.StartsWith("Assets" + Path.DirectorySeparatorChar + "Plugins", StringComparison.Ordinal) ||
+                        file.StartsWith("Assets" + Path.DirectorySeparatorChar + "Standard Assets", StringComparison.Ordinal) ||
+                        file.StartsWith("Assets" + Path.DirectorySeparatorChar + "Pro Standard Assets", StringComparison.Ordinal))
                     {
-                        continue;
+                        if (isFirst) AppendFile(src, file);
                     }
-                    appendFile(src, file);
+                    else
+                    {
+                        if (!isFirst) AppendFile(src, file);
+                    }
+
                 }
             }
 
-            foreach(var subDir in Directory.GetDirectories(dir))
+            foreach (var subDir in Directory.GetDirectories(dir))
             {
-                appendDirectory(src, subDir);
+                AppendDirectory(src, subDir, isFirst);
             }
         }
 
         //通过模板文件，获取编译参数
-        private static string getCompileArguments(Platform platform, string output)
+        private static string GetCompileArguments(string s_tmp_tpl, string s_src_tpl, string output, bool isFirst)
         {
             string compileTemplate;
-            if (!compileTemplates.TryGetValue(platform, out compileTemplate))
+            if (!File.Exists(s_src_tpl))
             {
-#if UNITY_EDITOR_WIN
-                var hostPlatform = "win";
-#elif UNITY_EDITOR_OSX
-                var hostPlatform = "osx";
-#else
-                var hostPlatform = "linux";
-#endif
-                var path = "IFixToolKit/" + platform + "." + hostPlatform + ".tpl";
-                if (!File.Exists(path))
-                {
-                    path = "IFixToolKit/" + platform + ".tpl";
-                    if (!File.Exists(path))
-                    {
-                        throw new InvalidOperationException("please put template file for " + platform
-                            + " in IFixToolKit directory!");
-                    }
-                }
-                compileTemplate = parseCompileTemplate(path);
-                compileTemplates.Add(platform, compileTemplate);
+                throw new InvalidOperationException("please put template file in IFixToolKit directory!");
             }
+            if (!compileTemplates.TryGetValue(s_tmp_tpl, out compileTemplate))
+            {
+                compileTemplate = string.Join("\n", File.ReadAllLines(s_src_tpl).Where(line => !line.StartsWith("Assets/", StringComparison.Ordinal)
+                && !line.StartsWith("\"Assets/", StringComparison.Ordinal)
+                && !line.StartsWith("'Assets/", StringComparison.Ordinal)
+                && !line.StartsWith("-out", StringComparison.Ordinal)
+                && !line.StartsWith("-r:'Library/ScriptAssemblies/Assembly-CSharp-firstpass.dll'", StringComparison.Ordinal)
+                ).ToArray());
+                compileTemplates.Add(s_tmp_tpl, compileTemplate);
+            }
+
             StringBuilder cmd = new StringBuilder();
             StringBuilder src = new StringBuilder();
-            StringBuilder dll = new StringBuilder();
 
-            appendDirectory(src, "Assets");
+            AppendDirectory(src, "Assets", isFirst);
             var projectDir = Application.dataPath.Replace(Path.DirectorySeparatorChar, '/');
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                try
-                {
-#if (UNITY_EDITOR || XLUA_GENERAL) && !NET_STANDARD_2_0
-                    if (!(assembly.ManifestModule is System.Reflection.Emit.ModuleBuilder))
-                    {
-#endif
-                        var assemblyPath = assembly.ManifestModule.FullyQualifiedName
-                            .Replace(Path.DirectorySeparatorChar, '/');
-                        if (assemblyPath.StartsWith(projectDir))
-                        {
-                            dll.Append("-r:");
-                            appendFile(dll, assemblyPath.Replace(projectDir, "Assets"));
-                        }
-#if (UNITY_EDITOR || XLUA_GENERAL) && !NET_STANDARD_2_0
-                    }
-#endif
-                } catch { }
-            }
+//            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+//            {
+//                try
+//                {
+//#if (UNITY_EDITOR || XLUA_GENERAL) && !NET_STANDARD_2_0
+//                    if (!(assembly.ManifestModule is System.Reflection.Emit.ModuleBuilder))
+//                    {
+//#endif
+//                        var assemblyPath = assembly.ManifestModule.FullyQualifiedName
+//                            .Replace(Path.DirectorySeparatorChar, '/');
+//                        if (assemblyPath.StartsWith(projectDir))
+//                        {
+//                            dll.Append("-r:");
+//                            appendFile(dll, assemblyPath.Replace(projectDir, "Assets"));
+//                        }
+//#if (UNITY_EDITOR || XLUA_GENERAL) && !NET_STANDARD_2_0
+//                    }
+//#endif
+//                }
+//                catch { }
+//            }
 
             cmd.AppendLine(compileTemplate);
-            cmd.Append(dll.ToString());
             cmd.Append(src.ToString());
-            cmd.AppendLine("-sdk:2");
             cmd.Append("-out:");
-            appendFile(cmd, output);
+            AppendFile(cmd, output);
+#if UNITY_EDITOR_OSX
+            var UnityEngineDir = Path.GetDirectoryName(typeof(UnityEngine.Debug).Module.FullyQualifiedName);
 
-            return cmd.ToString();
+            var ContentDir = Path.GetDirectoryName(Path.GetDirectoryName(UnityEngineDir));
+            var UnityPath = Path.GetDirectoryName(Path.GetDirectoryName(ContentDir));
+
+
+#elif UNITY_EDITOR_WIN
+            var ContentDir = Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName).Replace(Path.DirectorySeparatorChar, '/');;
+            var UnityPath = ContentDir;
+#endif
+
+            return cmd.ToString().Replace("${UnityHome}", UnityPath)
+                .Replace("${UnityHome}/Unity.app/Contents", ContentDir);
         }
-
         //1、解析编译参数（处理元文件之外的编译参数）
         //2、搜索工程的c#源码，加上编译参数编译
         //3、编译Assembly-CSharp.dll
@@ -570,7 +594,12 @@ namespace IFix.Editor
 
             while (!compileProcess.StandardError.EndOfStream)
             {
-                UnityEngine.Debug.LogError(compileProcess.StandardError.ReadLine());
+                var line = compileProcess.StandardError.ReadLine();
+                if(!line.Contains("warning"))
+                {
+                    UnityEngine.Debug.LogError(line);
+                }
+                
             }
 
             while (!compileProcess.StandardOutput.EndOfStream)
@@ -707,6 +736,8 @@ namespace IFix.Editor
                 catch { }
             }
 
+            GetAssetsDllPaths(args, "Assets");
+
             CallIFix(args);
 
             File.Delete(processCfgPath);
@@ -719,7 +750,7 @@ namespace IFix.Editor
         {
             foreach (var assembly in injectAssemblys)
             {
-                GenPatch(assembly, string.Format("./Library/ScriptAssemblies/{0}.dll", assembly), 
+                GenPatch(Path.GetFileNameWithoutExtension(assembly), assembly, 
                     "./Assets/Plugins/IFix.Core.dll", string.Format("{0}.patch.bytes", assembly));
             }
         }
@@ -741,5 +772,99 @@ namespace IFix.Editor
             EditorUtility.ClearProgressBar();
         }
 #endif
+
+
+        public static void GenPatchs(BuildTarget target,string outputdir)
+        {
+            Platform platform;
+            if (target == BuildTarget.Android)
+            {
+                platform = Platform.android;
+            }
+            else if (target == BuildTarget.iOS)
+            {
+                platform = Platform.ios;
+            }
+            else
+            {
+                throw new ArgumentOutOfRangeException(target.ToString(), "only suport android and ios platform!");
+            }
+            string f_dll;
+            string s_dll;
+            if (BuildAssembly(platform, "ifix_patch", out f_dll, out s_dll))
+            {
+                
+                if (Directory.Exists(outputdir))
+                {
+                    FileUtil.DeleteFileOrDirectory(outputdir);
+                }
+                Directory.CreateDirectory(outputdir);
+
+                GenPatch("Assembly-CSharp-firstpass",
+                    f_dll,
+                    "./Assets/Plugins/IFix.Core.dll",
+                    outputdir + "Assembly-CSharp-firstpass.patch.bytes");
+
+                GenPatch("Assembly-CSharp",
+                    s_dll,
+                    "./Assets/Plugins/IFix.Core.dll",
+                    outputdir + "Assembly-CSharp.patch.bytes");
+
+            }
+            for (int i = 2; i < injectAssemblys.Length; i++)
+            {
+                var assembly = injectAssemblys[i];
+                GenPatch(Path.GetFileNameWithoutExtension(assembly),
+                    assembly,
+                    "./Assets/Plugins/IFix.Core.dll",
+                    outputdir + string.Format("{0}.patch.bytes", Path.GetFileNameWithoutExtension(assembly)) );
+            }
+        }
+        public static bool BuildAssembly(Platform platform, string tempdir, out string firstDllPath, out string secendDllPath)
+        {
+            string f_tmp_tpl;
+            string s_tmp_tpl;
+            string f_dll;
+            string s_dll;
+            if (CreateBuildAssemblyArgsFile(platform, tempdir, out f_tmp_tpl, out s_tmp_tpl, out f_dll, out s_dll))
+            {
+                Compile(f_tmp_tpl);
+                if (!File.Exists(f_dll)) throw new FileNotFoundException(f_dll);
+
+                Compile(s_tmp_tpl);
+                if (!File.Exists(f_dll)) throw new FileNotFoundException(s_dll);
+
+                File.Delete(f_tmp_tpl);
+                File.Delete(s_tmp_tpl);
+            }
+            firstDllPath = f_dll;
+            secendDllPath = s_dll;
+            return true;
+        }
+        static bool CreateBuildAssemblyArgsFile(Platform platform, string tempdir, out string f_tmp_tpl, out string s_tmp_tpl, out string f_dll, out string s_dll)
+        {
+            Directory.CreateDirectory("Temp");
+            Directory.CreateDirectory("Temp/" + tempdir);
+
+
+            //First args file
+            f_tmp_tpl = "Temp/" + tempdir + "/tmp." + platform + ".Assembly-CSharp-firstpass.tpl";
+            var f_src_tpl = "IFixToolKit/" + platform + ".Assembly-CSharp-firstpass.tpl";
+            f_dll = "./Temp/" + tempdir + "/Assembly-CSharp-firstpass.dll";
+            var f_args = GetCompileArguments(f_tmp_tpl, f_src_tpl, f_dll, true);
+            File.WriteAllText(f_tmp_tpl, f_args);
+
+            //Secend args file
+            s_tmp_tpl = "Temp/" + tempdir + "/tmp." + platform + ".Assembly-CSharp.tpl";
+            var s_src_tpl = "IFixToolKit/" + platform + ".Assembly-CSharp.tpl";
+            s_dll = "./Temp/" + tempdir + "/Assembly-CSharp.dll";
+            var s_args = GetCompileArguments(s_tmp_tpl, s_src_tpl, s_dll, false);
+            s_args += "\n-r:'" + f_dll + "'";
+            File.WriteAllText(s_tmp_tpl, s_args);
+
+            return true;
+        }
+
+
     }
 }

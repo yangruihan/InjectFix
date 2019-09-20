@@ -1,11 +1,4 @@
-/*
- * Tencent is pleased to support the open source community by making InjectFix available.
- * Copyright (C) 2019 THL A29 Limited, a Tencent company.  All rights reserved.
- * InjectFix is licensed under the MIT License, except for the third-party components listed in the file 'LICENSE' which may be subject to their corresponding license terms. 
- * This file is subject to the terms and conditions defined in file 'LICENSE', which is part of this source code package.
- */
-
-using UnityEngine;
+锘縰sing UnityEngine;
 using UnityEditor;
 using System.Net;
 using System.Net.Sockets;
@@ -14,10 +7,6 @@ using System;
 
 namespace IFix.Editor
 {
-    //输入三个信息：
-    //  1、平台（ios、android）
-    //  2、手机的ip地址
-    //  3、端口信息，端口信息要和PatchReceiver配置对应上
     public class LiveDotNet : EditorWindow
     {
         private int platformIndex = 0;
@@ -25,7 +14,7 @@ namespace IFix.Editor
         private int port = 8080;
         private string[] platforms = new string[] { "ios", "android" };
 
-        [MenuItem("InjectFix/LiveDotNet")]
+        [MenuItem("IFix/LiveDotNet")]
         private static void OpenWindow()
         {
             LiveDotNet window = GetWindow<LiveDotNet>();
@@ -37,17 +26,45 @@ namespace IFix.Editor
             platformIndex = EditorGUILayout.Popup("Platform: ", platformIndex, platforms);
             strIp = EditorGUILayout.TextField("IP: ", strIp);
             port = EditorGUILayout.IntField("Port: ", port);
+            EditorGUILayout.BeginHorizontal();
             if (GUILayout.Button("patch"))
                 doPatch();
+            // if (GUILayout.Button("inject"))
+            //     inject();
+            EditorGUILayout.EndHorizontal();
         }
+        void inject()
+        {
+            
+            IFixEditor.Platform platform = platformIndex == 0 ? IFixEditor.Platform.ios : IFixEditor.Platform.android;
+            string f_dll;
+            string s_dll;
+            if (IFixEditor.BuildAssembly(platform, "ifix_inject", out f_dll, out s_dll))
+            {
+                //IFixEditor.InjectAssembly(f_dll);
+                IFixEditor.InjectAssembly(s_dll);
 
-        //1、IFixEditor.GenPlatformPatch会生成生成补丁文件
-        //2、发送给手机
+                //File.Delete(f_dll);
+                //File.Delete(f_dll + ".mdb");
+                //File.Delete(s_dll);
+                //File.Delete(s_dll + ".mdb");
+            }
+        }
         void doPatch()
         {
             IFixEditor.Platform platform = platformIndex == 0 ? IFixEditor.Platform.ios : IFixEditor.Platform.android;
-            string patchPath = "Temp/Assembly-CSharp.patch.bytes";
-            IFixEditor.GenPlatformPatch(platform, "Temp/");
+            string patchPath = "Temp/tmp_live_dot_net_patch";
+
+            string f_dll;
+            string s_dll;
+            if (IFixEditor.BuildAssembly(platform, "ifix_patch", out f_dll, out s_dll))
+            {
+                IFixEditor.GenPatch("Assembly-CSharp", s_dll, "./Assets/Plugins/IFix.Core.dll", patchPath);
+                File.Delete(f_dll);
+                File.Delete(f_dll + ".mdb");
+                File.Delete(s_dll);
+                File.Delete(s_dll + ".mdb");
+            }
 
             IPAddress ip;
             if (!IPAddress.TryParse(strIp, out ip))
@@ -60,9 +77,6 @@ namespace IFix.Editor
             File.Delete(patchPath);
         }
 
-        //1、对手机建立TCP链接
-        //2、发送整个包
-        //3、关闭链接
         void doSend(byte[] bytes, IPEndPoint remoteEndPoint)
         {
             try
@@ -72,10 +86,20 @@ namespace IFix.Editor
 
                 try
                 {
-                    sender.Connect(remoteEndPoint);
+                    IAsyncResult result = sender.BeginConnect(remoteEndPoint,null,null);
 
-                    Debug.Log(string.Format("Socket connected to {0}",
-                        sender.RemoteEndPoint.ToString()));
+                    bool success = result.AsyncWaitHandle.WaitOne(1000, true);
+
+                    if(sender.Connected)
+                    {
+                        sender.EndConnect(result);
+                    }else
+                    {
+                        sender.Close();
+                        throw new TimeoutException("Failed to connect " + remoteEndPoint);
+                    }
+
+                    Debug.Log(string.Format("Socket connected to {0}", sender.RemoteEndPoint.ToString()));
 
                     int bytesSent = sender.Send(bytes);
 
