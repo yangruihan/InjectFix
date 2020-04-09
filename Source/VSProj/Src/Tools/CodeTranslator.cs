@@ -152,6 +152,7 @@ namespace IFix
         //再补丁新增一个对原生方法的引用
         int addExternType(TypeReference type, TypeReference contextType = null)
         {
+            if (type.IsRequiredModifier) return addExternType((type as RequiredModifierType).ElementType, contextType);
             if (type.IsGenericParameter || type.HasGenericArgumentFromMethod())
             {
                 throw new InvalidProgramException("try to use a generic type definition");
@@ -918,7 +919,7 @@ namespace IFix
 
             methodToId.Add(method, methodId);
 
-            if (methodId > ushort.MaxValue)
+            if (mode == ProcessMode.Patch && methodId > ushort.MaxValue)
             {
                 throw new OverflowException("too many internal methods");
             }
@@ -1066,7 +1067,36 @@ namespace IFix
                 code.Add(new Core.Instruction { Code = Core.Code.StackSpace, Operand = (body.Variables.Count << 16)
                     | body.MaxStackSize }); // local | maxstack
 
-                //TODO: locals init，复杂值类型要new，引用类型要留空位
+                int offsetAdd = 0;
+
+                foreach(var variable in body.Variables)
+                {
+                    if (variable.VariableType.IsValueType && !variable.VariableType.IsPrimitive)
+                    {
+                        code.Add(new Core.Instruction
+                        {
+                            Code = Core.Code.Ldloca,
+                            Operand = variable.Index,
+                        });
+
+                        code.Add(new Core.Instruction
+                        {
+                            Code = Core.Code.Initobj,
+                            Operand = addExternType(variable.VariableType)
+                        });
+                        offsetAdd += 2;
+                    }
+                }
+
+                if (offsetAdd > 0)
+                {
+                    var ilNewOffset = new Dictionary<Instruction, int>();
+                    foreach (var kv in ilOffset)
+                    {
+                        ilNewOffset[kv.Key] = kv.Value + offsetAdd;
+                    }
+                    ilOffset = ilNewOffset;
+                }
 
                 Core.ExceptionHandler[] exceptionHandlers = new Core.ExceptionHandler[body.ExceptionHandlers.Count];
 
@@ -1101,7 +1131,7 @@ namespace IFix
 
                 bool typeofDetected = false;
 
-                Core.Instruction operand;
+                Core.Instruction operand = new Core.Instruction();
                 for (int i = 0; i < msIls.Count; i++)
                 {
                     var msIl = msIls[i];
@@ -1731,6 +1761,8 @@ namespace IFix
         private TypeReference voidType;
         private TypeDefinition wrapperType;
         private TypeDefinition idMapType;
+        private TypeReference enumType;
+        private List<TypeDefinition> idMapList;
         private TypeDefinition itfBridgeType;
         private int bridgeMethodId;
         private TypeReference anonymousStoreyTypeRef;
@@ -1965,10 +1997,12 @@ namespace IFix
             //适配器参数类型，不是强制noBaselize的话，引用类型，复杂非引用值类型，均转为object
             List<TypeReference> wrapperParameterTypes = new List<TypeReference>();
             List<bool> isOut = new List<bool>();
+            List<bool> isIn = new List<bool>();
             //List<ParameterAttributes> paramAttrs = new List<ParameterAttributes>();
             if (!md.IsStatic && !isClosure && !isInterfaceBridge) //匿名类闭包的this是自动传，不需要显式参数
             {
                 isOut.Add(false);
+                isIn.Add(false);
                 //paramAttrs.Add(Mono.Cecil.ParameterAttributes.None);
                 if (method.DeclaringType.IsValueType)
                 {
@@ -1987,11 +2021,16 @@ namespace IFix
             for (int i = 0; i < method.Parameters.Count; i++)
             {
                 isOut.Add(method.Parameters[i].IsOut);
+                isIn.Add(method.Parameters[i].IsIn);
                 //paramAttrs.Add(method.Parameters[i].Attributes);
                 var paramType = method.Parameters[i].ParameterType;
                 if (paramType.IsGenericParameter)
                 {
                     paramType = (paramType as GenericParameter).ResolveGenericArgument(method.DeclaringType);
+                }
+                if (paramType.IsRequiredModifier)
+                {
+                    paramType = (paramType as RequiredModifierType).ElementType;
                 }
                 parameterTypes.Add(paramType);
                 wrapperParameterTypes.Add(noBaselize ? paramType : wrapperParamerterType(paramType));
@@ -2030,7 +2069,7 @@ namespace IFix
                     for (int j = 0; j < wrapperParameterTypes.Count; j++)
                     {
                         if (!wrapperParameterTypes[j].IsSameType(wrapperMethod.Parameters[j].ParameterType)
-                            || isOut[j] != wrapperMethod.Parameters[j].IsOut)
+                            || isOut[j] != wrapperMethod.Parameters[j].IsOut || isIn[j] != wrapperMethod.Parameters[j].IsIn)
                         {
                             paramMatch = false;
                             break;
@@ -2053,9 +2092,11 @@ namespace IFix
 
             for (int i = 0; i < parameterTypes.Count; i++)
             {
-                refPos[i] = parameterTypes[i].IsByReference ? refCount++ : -1;
-                wrapperMethod.Parameters.Add(new ParameterDefinition("P" + i, isOut[i] ? ParameterAttributes.Out
-                    : ParameterAttributes.None, wrapperParameterTypes[i].TryImport(assembly.MainModule)));
+                refPos[i] = (parameterTypes[i].IsByReference) ? refCount++ : -1;
+                var parameterAttributes = ParameterAttributes.None;
+                if (isOut[i]) parameterAttributes |= ParameterAttributes.Out;
+                if (isIn[i]) parameterAttributes |= ParameterAttributes.In;
+                wrapperMethod.Parameters.Add(new ParameterDefinition("P" + i, parameterAttributes, wrapperParameterTypes[i].TryImport(assembly.MainModule)));
             }
 
             var ilProcessor = wrapperMethod.Body.GetILProcessor();
@@ -2250,7 +2291,7 @@ namespace IFix
                 // Ref param
                 for (int i = 0; i < parameterTypes.Count; i++)
                 {
-                    if (parameterTypes[i].IsByReference)
+                    if (parameterTypes[i].IsByReference && ! isIn[i])
                     {
                         emitLdarg(instructions, ilProcessor, i + 1);
                         var paramRawType = tryGetUnderlyingType(getRawType(parameterTypes[i]));
@@ -2490,12 +2531,9 @@ namespace IFix
             //end init itfBridgeType
 
             //begin init idMapper
-            var enumType = assembly.MainModule.ImportReference(typeof(System.Enum));
-            idMapType = new TypeDefinition("IFix", "IDMAP", TypeAttributes.Public | TypeAttributes.Sealed,
-                    enumType);
-            assembly.MainModule.Types.Add(idMapType);
-            idMapType.Fields.Add(new FieldDefinition("value__", FieldAttributes.Public | FieldAttributes.SpecialName
-                | FieldAttributes.RTSpecialName, assembly.MainModule.TypeSystem.Int32));
+            enumType = assembly.MainModule.ImportReference(typeof(System.Enum));
+            idMapList = new List<TypeDefinition>();
+            idMapType = null;
             //end init idMapper
 
             wrapperMethods = new List<MethodDefinition>();
@@ -2566,6 +2604,24 @@ namespace IFix
             initStackOp(Call, assembly.MainModule.TypeSystem.Object);
             initStackOp(Call, assembly.MainModule.TypeSystem.IntPtr);
             initStackOp(Call, assembly.MainModule.TypeSystem.UIntPtr);
+        }
+
+        const int MAX_ID_MAP_FIELD_COUNT = 32760;
+
+        void idMapTypeCheck()
+        {
+            if (idMapType == null || idMapType.Fields.Count >= MAX_ID_MAP_FIELD_COUNT)
+            {
+                if (idMapType != null)
+                {
+                    idMapList.Add(idMapType);
+                }
+                idMapType = new TypeDefinition("IFix", "IDMAP" + idMapList.Count, TypeAttributes.Public | TypeAttributes.Sealed,
+                        enumType);
+                assembly.MainModule.Types.Add(idMapType);
+                idMapType.Fields.Add(new FieldDefinition("value__", FieldAttributes.Public | FieldAttributes.SpecialName
+                    | FieldAttributes.RTSpecialName, assembly.MainModule.TypeSystem.Int32));
+            }
         }
 
         void initStackOp(TypeDefinition call, TypeReference type)
@@ -2816,6 +2872,7 @@ namespace IFix
             {
                 throw new Exception("try inject method twice: " + method);
             }
+            idMapTypeCheck();
             var redirectIdField = new FieldDefinition("tmp_r_field_" + redirectIdMap.Count, FieldAttributes.Public
                 | FieldAttributes.Static | FieldAttributes.Literal | FieldAttributes.HasDefault, idMapType);
             idMapType.Fields.Add(redirectIdField);
@@ -2906,6 +2963,8 @@ namespace IFix
                     }
                 }
             }
+            idMapList.Add(idMapType);
+            idMapType = null;
         }
 
         //1、构造函数及析构函数不转，不支持的指令不转，转的函数留下函数定义，所以支持反射
@@ -3243,6 +3302,10 @@ namespace IFix
                     {
                         paramType = (paramType as GenericParameter).ResolveGenericArgument(method.DeclaringType);
                     }
+                    if (paramType.IsRequiredModifier)
+                    {
+                        paramType = (paramType as RequiredModifierType).ElementType;
+                    }
                     if (!externTypeToId.ContainsKey(paramType))
                     {
                         throw new Exception("externTypeToId do not exist key: " + paramType
@@ -3402,7 +3465,23 @@ namespace IFix
                 }
 
                 writer.Write(wrapperMgrImpl.GetAssemblyQualifiedName());
-                writer.Write(idMapType.GetAssemblyQualifiedName());
+
+                TypeDefinition idMap0 = null;
+                if (idMapList.Count == 0)
+                {
+                    if (idMapType == null)
+                    {
+                        idMapTypeCheck();
+                    }
+                    idMap0 = idMapType;
+                    idMapType = null;
+                }
+                else
+                {
+                    idMap0 = idMapList[0];
+                }
+                var idMap0Name = idMap0.GetAssemblyQualifiedName();
+                writer.Write(idMap0Name.Substring("IFix.IDMAP0".Length));
 
                 writer.Write(interpretMethods.Count);
                 //Console.WriteLine("interpretMethods.Count:" + interpretMethods.Count);
