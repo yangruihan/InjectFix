@@ -62,6 +62,9 @@ namespace IFix.Editor
         //备份文件的时间戳生成格式
         const string TIMESTAMP_FORMAT = "yyyyMMddHHmmss";
 
+        //注入的目标文件夹
+        private static string targetAssembliesFolder = "";
+
         //system("mono ifix.exe [args]")
         public static void CallIFix(List<string> args)
         {
@@ -282,7 +285,7 @@ namespace IFix.Editor
             {
 
                 var core_path = "./Assets/Plugins/IFix.Core.dll";
-                var assembly_path = string.Format("./Library/ScriptAssemblies/{0}.dll", assembly);
+                var assembly_path = string.Format("./Library/{0}/{1}.dll", targetAssembliesFolder, assembly);
                 var patch_path = string.Format("./{0}.ill.bytes", assembly);
                 List<string> args = new List<string>() { "-inject", core_path, assembly_path,
                     processCfgPath, patch_path, assembly_path };
@@ -315,6 +318,8 @@ namespace IFix.Editor
                 return;
             }
 
+            targetAssembliesFolder = GetScriptAssembliesFolder();
+
             foreach (var assembly in injectAssemblys)
             {
                 InjectAssembly(assembly);
@@ -323,6 +328,16 @@ namespace IFix.Editor
             //doBackup(DateTime.Now.ToString(TIMESTAMP_FORMAT));
 
             AssetDatabase.Refresh();
+        }
+
+        private static string GetScriptAssembliesFolder()
+        {
+            var assembliesFolder = "PlayerScriptAssemblies";
+            if (!Directory.Exists(string.Format("./Library/{0}/", assembliesFolder)))
+            {
+                assembliesFolder = "ScriptAssemblies";
+            }
+            return assembliesFolder;
         }
 
         //默认的注入及备份程序集
@@ -344,7 +359,7 @@ namespace IFix.Editor
                 Directory.CreateDirectory(BACKUP_PATH);
             }
 
-            var scriptAssembliesDir = "./Library/ScriptAssemblies/";
+            var scriptAssembliesDir = string.Format("./Library/{0}/", targetAssembliesFolder);
 
             foreach (var assembly in injectAssemblys)
             {
@@ -375,7 +390,7 @@ namespace IFix.Editor
         /// <param name="ts">时间戳</param>
         static void doRestore(string ts)
         {
-            var scriptAssembliesDir = "./Library/ScriptAssemblies/";
+            var scriptAssembliesDir = string.Format("./Library/{0}/", targetAssembliesFolder);
 
             foreach (var assembly in injectAssemblys)
             {
@@ -690,6 +705,47 @@ namespace IFix.Editor
             }
         }
 
+        static void writeFields(BinaryWriter writer, List<FieldInfo> fields)
+        {
+            var fieldGroups = fields.GroupBy(m => m.DeclaringType).ToList();
+            writer.Write(fieldGroups.Count);
+            foreach (var fieldGroup in fieldGroups)
+            {
+                writer.Write(GetCecilTypeName(fieldGroup.Key));
+                writer.Write(fieldGroup.Count());
+                foreach (var field in fieldGroup)
+                {
+                    writer.Write(field.Name);
+                    writer.Write(GetCecilTypeName(field.FieldType));
+                }
+            }
+        }
+
+        static void writeProperties(BinaryWriter writer, List<PropertyInfo> properties)
+        {
+            var PropertyGroups = properties.GroupBy(m => m.DeclaringType).ToList();
+            writer.Write(PropertyGroups.Count);
+            foreach (var PropertyGroup in PropertyGroups)
+            {
+                writer.Write(GetCecilTypeName(PropertyGroup.Key));
+                writer.Write(PropertyGroup.Count());
+                foreach (var Property in PropertyGroup)
+                {
+                    writer.Write(Property.Name);
+                    writer.Write(GetCecilTypeName(Property.PropertyType));
+                }
+            }
+        }
+
+        static void writeClasses(BinaryWriter writer, List<Type> classes)
+        {
+            writer.Write(classes.Count);
+            foreach (var classGroup in classes)
+            {
+                writer.Write(GetCecilTypeName(classGroup));
+            }
+        }
+
         static bool hasGenericParameter(Type type)
         {
             if (type.IsByRef || type.IsArray)
@@ -750,6 +806,9 @@ namespace IFix.Editor
             }
 
             var newMethods = Configure.GetTagMethods(typeof(InterpretAttribute), assembly).ToList();
+            var newFields = Configure.GetTagFields(typeof(InterpretAttribute), assembly).ToList();
+            var newProperties = Configure.GetTagProperties(typeof(InterpretAttribute), assembly).ToList();
+            var newClasses = Configure.GetTagClasses(typeof(InterpretAttribute), assembly).ToList();
             genericMethod = newMethods.FirstOrDefault(m => hasGenericParameter(m));
             if (genericMethod != null)
             {
@@ -763,6 +822,9 @@ namespace IFix.Editor
             {
                 writeMethods(writer, patchMethods);
                 writeMethods(writer, newMethods);
+                writeFields(writer, newFields);
+                writeProperties(writer, newProperties);
+                writeClasses(writer, newClasses);
             }
 
             List<string> args = new List<string>() { "-patch", corePath, assemblyCSharpPath, "null",
@@ -795,8 +857,9 @@ namespace IFix.Editor
             {
                 foreach (var assembly in injectAssemblys)
                 {
-                    GenPatch(assembly, string.Format("./Library/ScriptAssemblies/{0}.dll", assembly),
-                        "./Assets/Plugins/IFix.Core.dll", string.Format("{0}.patch.bytes", assembly));
+                    var assembly_path = string.Format("./Library/{0}/{1}.dll", GetScriptAssembliesFolder(), assembly);
+                    GenPatch(assembly, assembly_path, "./Assets/Plugins/IFix.Core.dll",
+                        string.Format("{0}.patch.bytes", assembly));
                 }
             }
             catch (Exception e)

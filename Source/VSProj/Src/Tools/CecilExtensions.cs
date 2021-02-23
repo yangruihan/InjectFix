@@ -411,7 +411,7 @@ namespace IFix
                         || left.Name != right.Name
                         || !left.ReturnType.IsSameName(right.ReturnType)
                         || !left.DeclaringType.IsSameName(right.DeclaringType)
-                        || left.HasThis != left.HasThis
+                        || left.HasThis != right.HasThis
                         || left.GenericParameters.Count != right.GenericParameters.Count)
             {
                 return false;
@@ -457,6 +457,7 @@ namespace IFix
         // #lizard forgives
         public static TypeReference TryImport(this TypeReference toImport, ModuleDefinition module)
         {
+            if (toImport == null) return null;
             if (toImport.Namespace == "System")
             {
                 if (toImport.Name == "Boolean")
@@ -516,7 +517,6 @@ namespace IFix
                     return module.TypeSystem.UIntPtr;
                 }
             }
-            if (toImport == null) return null;
             if (toImport.IsGenericParameter) return toImport;
             if (toImport.IsGenericInstance)
             {

@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Tencent is pleased to support the open source community by making InjectFix available.
  * Copyright (C) 2019 THL A29 Limited, a Tencent company.  All rights reserved.
  * InjectFix is licensed under the MIT License, except for the third-party components listed in the file 'LICENSE' which may be subject to their corresponding license terms. 
@@ -258,6 +258,10 @@ namespace IFix.Core
                     | BindingFlags.Instance))
                 {
                     int methodId = reader.ReadInt32();
+                    if (!itfMethodToId.ContainsKey(method))
+                    {
+                        throw new Exception("can not find slot for " + method + " of " + itf);
+                    }
                     slots[itfMethodToId[method]] = methodId;
                     //VirtualMachine._Info(string.Format("<<< {0} [{1}]", method, methodId));
                 }
@@ -266,7 +270,7 @@ namespace IFix.Core
         }
 
         // #lizard forgives
-        unsafe static public VirtualMachine Load(Stream stream)
+        unsafe static public VirtualMachine Load(Stream stream, bool checkNew = true)
         {
             List<IntPtr> nativePointers = new List<IntPtr>();
 
@@ -275,6 +279,7 @@ namespace IFix.Core
             Type[] externTypes;
             MethodBase[] externMethods;
             List<ExceptionHandler[]> exceptionHandlers = new List<ExceptionHandler[]>();
+            Dictionary<int, NewFieldInfo> newFieldInfo = new Dictionary<int, NewFieldInfo>();
             string[] internStrings;
             FieldInfo[] fieldInfos;
             Type[] staticFieldTypes;
@@ -371,13 +376,45 @@ namespace IFix.Core
                 fieldInfos = new FieldInfo[reader.ReadInt32()];
                 for (int i = 0; i < fieldInfos.Length; i++)
                 {
-                    var type = externTypes[reader.ReadInt32()];
+                    var isNewField = reader.ReadBoolean();
+                    var declaringType = externTypes[reader.ReadInt32()];
                     var fieldName = reader.ReadString();
-                    fieldInfos[i] = type.GetField(fieldName, 
+                    
+                    fieldInfos[i] = declaringType.GetField(fieldName, 
                         BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static);
-                    if (fieldInfos[i] == null)
+
+                    if(!isNewField)
                     {
-                        throw new Exception("can not load field [" + fieldName + "] of " + type);
+                        if(fieldInfos[i] == null)
+                        {
+                            throw new Exception("can not load field [" + fieldName + "] " + " of " + declaringType);
+                        }
+                    }
+                    else
+                    {
+                        var fieldType = externTypes[reader.ReadInt32()];
+                        var methodId = reader.ReadInt32();
+                        
+                        if(fieldInfos[i] == null)
+                        {
+                            newFieldInfo.Add(i, new NewFieldInfo{
+                                Name = fieldName,
+                                FieldType = fieldType,
+                                DeclaringType = declaringType,
+                                MethodId = methodId,
+                            });
+                        }
+                        else
+                        {
+                            if(fieldInfos[i].FieldType != fieldType)
+                            {
+                                throw new Exception("can not change existing field [" + declaringType + "." + fieldName + "]'s type " + " from " + fieldInfos[i].FieldType + " to " + fieldType);
+                            }
+                            else
+                            {
+                                throw new Exception(declaringType + "." + fieldName + " is expected to be a new field , but it already exists ");
+                            }
+                        }
                     }
                 }
 
@@ -415,16 +452,29 @@ namespace IFix.Core
                 for (int i = 0; i < anonymousStoreyInfos.Length; i++)
                 {
                     int fieldNum = reader.ReadInt32();
+                    int[] fieldTypes = new int[fieldNum];
+                    for (int fieldIdx = 0; fieldIdx < fieldNum; ++fieldIdx)
+                    {
+                        fieldTypes[fieldIdx] = reader.ReadInt32();
+                    }
                     int ctorId = reader.ReadInt32();
                     int ctorParamNum = reader.ReadInt32();
                     var slots = readSlotInfo(reader, itfMethodToId, externTypes, maxId);
                     
+                    int virtualMethodNum = reader.ReadInt32();
+                    int[] vTable = new int[virtualMethodNum];
+                    for (int vm = 0 ;vm < virtualMethodNum; vm++)
+                    {
+                        vTable[vm] = reader.ReadInt32();
+                    }
                     anonymousStoreyInfos[i] = new AnonymousStoreyInfo()
                     {
                         CtorId = ctorId,
                         FieldNum = fieldNum,
+                        FieldTypes = fieldTypes,
                         CtorParamNum = ctorParamNum,
-                        Slots = slots
+                        Slots = slots,
+                        VTable = vTable
                     };
                 }
 
@@ -442,6 +492,7 @@ namespace IFix.Core
                     ExceptionHandlers = exceptionHandlers.ToArray(),
                     InternStrings = internStrings,
                     FieldInfos = fieldInfos,
+                    NewFieldInfos = newFieldInfo,
                     AnonymousStoreyInfos = anonymousStoreyInfos,
                     StaticFieldTypes = staticFieldTypes,
                     Cctors = cctors
@@ -531,6 +582,20 @@ namespace IFix.Core
                     {
                         wrapperManager.InitWrapperArray(0);
                     };
+                }
+
+                if (checkNew)
+                {
+                    int newClassCount = reader.ReadInt32();
+                    for (int i = 0; i < newClassCount; i++)
+                    {
+                        var newClassFullName = reader.ReadString();
+                        var newClassName = Type.GetType(newClassFullName);
+                        if (newClassName != null)
+                        {
+                            throw new Exception(newClassName + " class is expected to be a new class , but it already exists ");
+                        }
+                    }
                 }
 
                 return virtualMachine;

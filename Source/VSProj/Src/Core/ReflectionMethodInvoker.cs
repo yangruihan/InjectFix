@@ -46,7 +46,7 @@ namespace IFix.Core
 
             for (int i = 0; i < paramerInfos.Length; i++)
             {
-                outFlags[i] = paramerInfos[i].IsOut;
+                outFlags[i] = !paramerInfos[i].IsIn && paramerInfos[i].IsOut;
                 if (paramerInfos[i].ParameterType.IsByRef)
                 {
                     refFlags[i] = true;
@@ -182,6 +182,10 @@ namespace IFix.Core
                         pushResult = true;
                     }
                 }
+            }
+            catch (TargetInvocationException e)
+            {
+                throw e.InnerException;
             }
             //catch (TargetException  e)
             //{
