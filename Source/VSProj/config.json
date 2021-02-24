@@ -1,5 +1,6 @@
 {
-    "UnityHome": "/Applications/Unity2017/Unity.app",
+    "UnityHome": "/Applications/Unity/Hub/Editor/2020.2.1f1/Unity.app",
+    "UseMCS": true,
     "DllOutput": "../UnityProj/Assets/Plugins/IFix.Core.dll",
     "ToolKitOutput": "../UnityProj/IFixToolKit",
     "ConfuseKey": ""

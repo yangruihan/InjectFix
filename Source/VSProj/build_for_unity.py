@@ -13,13 +13,21 @@ def parse_global_config():
         global_config = json.loads(content)
 
         if 'windows' in platform.platform().lower():
-            global_config['gmcs'] = os.path.join(
-                global_config['UnityHome'], 'Editor/Data/Mono/bin/gmcs')
+            if global_config['UseMCS']:
+                global_config['gmcs'] = os.path.join(
+                    global_config['UnityHome'], 'Editor/Data/MonoBleedingEdge/bin/mcs')
+            else:
+                global_config['gmcs'] = os.path.join(
+                    global_config['UnityHome'], 'Editor/Data/Mono/bin/gmcs')
             global_config['mono'] = os.path.join(
                 global_config['UnityHome'], 'Editor/Data/MonoBleedingEdge/bin/mono')
         else:
-            global_config['gmcs'] = os.path.join(
-                global_config['UnityHome'], 'Contents/Mono/bin/gmcs')
+            if global_config['UseMCS']:
+                global_config['gmcs'] = os.path.join(
+                    global_config['UnityHome'], 'Contents/MonoBleedingEdge/bin/mcs')
+            else:
+                global_config['gmcs'] = os.path.join(
+                    global_config['UnityHome'], 'Contents/Mono/bin/gmcs')
             global_config['mono'] = os.path.join(
                 global_config['UnityHome'], 'Contents/MonoBleedingEdge/bin/mono')
 
